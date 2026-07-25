@@ -48,6 +48,7 @@ requires-python = ">=3.10"
 Homepage = "https://github.com/KarimAziev/gspeech"
 Issues = "https://github.com/KarimAziev/gspeech/issues"
 Repository = "https://github.com/KarimAziev/gspeech"
+Changelog = "https://github.com/KarimAziev/gspeech/blob/main/CHANGELOG.md"
 
 [project.scripts]
 gspeech = "gspeech.cli:main"
