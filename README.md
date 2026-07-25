@@ -1,4 +1,4 @@
-# gspeech
+# About
 
 [![CI](https://github.com/KarimAziev/gspeech/actions/workflows/ci.yml/badge.svg)](https://github.com/KarimAziev/gspeech/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/KarimAziev/gspeech/graph/badge.svg)](https://codecov.io/gh/KarimAziev/gspeech)
@@ -12,17 +12,18 @@ The Google Translate endpoint is undocumented and is not an official Google API.
 Applications should therefore handle synthesis failures and should not rely on
 the endpoint for safety-critical announcements.
 
-## Contents
+**Table of Contents**
 
-- [Installation](#installation)
-- [Usage](#usage)
-  - [Command line](#command-line)
-  - [Python API](#python-api)
-- [Interruption and queuing](#interruption-and-queuing)
-- [Synthesis and cache configuration](#synthesis-and-cache-configuration)
-- [Logging](#logging)
-- [Errors and shutdown](#errors-and-shutdown)
-- [Development](#development)
+> - [About](#about)
+>   - [Installation](#installation)
+>   - [Usage](#usage)
+>     - [Command line](#command-line)
+>     - [Python API](#python-api)
+>       - [Interruption and queuing](#interruption-and-queuing)
+>       - [Synthesis and cache configuration](#synthesis-and-cache-configuration)
+>       - [Logging](#logging)
+>       - [Errors and shutdown](#errors-and-shutdown)
+>   - [Development](#development)
 
 ## Installation
 
@@ -43,13 +44,13 @@ gspeech "Hello, world"
 Select a language:
 
 ```bash
-gspeech --lang fr "Bonjour tout le monde"
+gspeech -l fr "Bonjour tout le monde"
 ```
 
 Save MP3 data instead of playing it:
 
 ```bash
-gspeech --output hello.mp3 "Hello, world"
+gspeech -o hello.mp3 "Hello, world"
 ```
 
 Read and speak standard input one line at a time:
@@ -103,7 +104,7 @@ with SpeechPlayer() as player:
     print(second.wait().status)  # SpeechStatus.COMPLETED
 ```
 
-## Interruption and queuing
+#### Interruption and queuing
 
 `SpeechPlayer.speak()` is non-blocking and returns a thread-safe
 `SpeechHandle`. The default `replace` policy:
@@ -148,7 +149,7 @@ player.close()
 implementations. `Speech.write_to()` does not close an injected synthesizer
 because the caller owns that standalone dependency.
 
-## Synthesis and cache configuration
+#### Synthesis and cache configuration
 
 `GoogleTranslateTTSClient` owns HTTP sessions, timeouts, and the persistent
 audio cache:
@@ -184,7 +185,7 @@ Cache keys are SHA-256 digests and do not contain the original speech text.
 Audio data is stored in a small SQLite database under the platform-specific user
 cache directory by default.
 
-## Logging
+#### Logging
 
 Library loggers use the `gspeech` namespace and do not configure application
 logging. Applications can enable them normally:
@@ -200,7 +201,7 @@ Lifecycle logs include request IDs, language, character counts, segment numbers,
 statuses, and elapsed times. They intentionally omit speech text and complete
 provider URLs.
 
-## Errors and shutdown
+#### Errors and shutdown
 
 The public exception hierarchy is:
 
