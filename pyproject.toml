@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools", "setuptools_scm", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*", "test*"]
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "dirty-tag"
+write_to = "gspeech/version.py"
+
+[project]
+name = "gspeech"
+description = "Interruptible text-to-speech using the Google Translate TTS API."
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Karim Aziiev", email = "karim.aziiev@gmail.com" }
+]
+dependencies = [
+  "appdirs>=1.4.0",
+  "miniaudio>=1.61",
+  "requests>=2.6.0",
+  "web_cache>=1.1.0"
+]
+
+keywords = ["speech", "audio", "synthesis", "voice", "google", "tts"]
+dynamic = ["version"]
+
+requires-python = ">=3.10"
+
+[project.scripts]
+gspeech = "gspeech.cli:main"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["gspeech/version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501", "E731", "E402"]
+
+[project.optional-dependencies]
+dev = [
+  "pre-commit",
+  "pyright",
+  "ruff",
+]

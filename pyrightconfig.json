@@ -1,0 +1,5 @@
+{
+  "enableReachabilityAnalysis": false,
+  "reportMissingImports": "error",
+  "reportUninitializedInstanceVariable": false
+}
