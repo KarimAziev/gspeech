@@ -2,7 +2,9 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from gspeech._cache import NullAudioCache, SQLiteAudioCache
 
@@ -36,7 +38,7 @@ class TestSQLiteAudioCache(unittest.TestCase):
             cache.set("second", b"two")
             self.assertEqual(cache.get("first"), b"one")
 
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection, connection:
                 connection.execute(
                     "UPDATE audio_cache SET created_at = ? WHERE key = ?",
                     (time.time() - 20, "first"),
@@ -62,6 +64,32 @@ class TestSQLiteAudioCache(unittest.TestCase):
             self.assertEqual(cache.get("first"), b"one")
             self.assertIsNone(cache.get("second"))
             self.assertEqual(cache.get("third"), b"three")
+            cache.close()
+
+    def test_closes_each_database_connection(self):
+        connections: list[sqlite3.Connection] = []
+        original_connect = SQLiteAudioCache._connect
+
+        def tracked_connect(cache: SQLiteAudioCache) -> sqlite3.Connection:
+            connection = original_connect(cache)
+            connections.append(connection)
+            return connection
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(SQLiteAudioCache, "_connect", tracked_connect):
+                cache = SQLiteAudioCache(
+                    Path(temp_dir) / "cache.sqlite3",
+                    ttl_seconds=10,
+                    max_entries=2,
+                )
+                cache.set("key", b"audio")
+                self.assertEqual(cache.get("key"), b"audio")
+                cache.clear()
+
+            self.assertTrue(connections)
+            for connection in connections:
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute("SELECT 1")
 
 
 if __name__ == "__main__":

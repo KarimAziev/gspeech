@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
 
@@ -66,7 +68,7 @@ class SQLiteAudioCache:
         self.max_entries = max_entries
         self._lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute(
                 """
@@ -82,9 +84,18 @@ class SQLiteAudioCache:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=5)
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def get(self, key: str) -> bytes | None:
         now = time.time()
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             row = connection.execute(
                 "SELECT audio, created_at FROM audio_cache WHERE key = ?",
                 (key,),
@@ -105,7 +116,7 @@ class SQLiteAudioCache:
 
     def set(self, key: str, audio_data: bytes) -> None:
         now = time.time()
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO audio_cache (key, audio, created_at, accessed_at)
@@ -131,7 +142,7 @@ class SQLiteAudioCache:
             )
 
     def clear(self) -> None:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             connection.execute("DELETE FROM audio_cache")
 
     def close(self) -> None:

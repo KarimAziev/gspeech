@@ -4,6 +4,7 @@ import threading
 import unittest
 import urllib.parse
 from collections.abc import Iterable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -135,7 +136,7 @@ class TestGoogleTranslateTTSClient(unittest.TestCase):
             client.close()
 
             database = Path(temp_dir) / "audio-cache.sqlite3"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 key, audio = connection.execute(
                     "SELECT key, audio FROM audio_cache"
                 ).fetchone()
