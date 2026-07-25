@@ -1,7 +1,6 @@
-# About
+[![CI](https://github.com/KarimAziev/gspeech/actions/workflows/ci.yml/badge.svg)](https://github.com/KarimAziev/gspeech/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/KarimAziev/gspeech/graph/badge.svg)](https://codecov.io/gh/KarimAziev/gspeech) [![PyPI](https://img.shields.io/pypi/v/g-speech)](https://pypi.org/project/g-speech/)
 
-[![CI](https://github.com/KarimAziev/gspeech/actions/workflows/ci.yml/badge.svg)](https://github.com/KarimAziev/gspeech/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/KarimAziev/gspeech/graph/badge.svg)](https://codecov.io/gh/KarimAziev/gspeech)
+# About
 
 `gspeech` synthesizes speech with the Google Translate TTS endpoint and plays it
 through a small, cross-platform
