@@ -28,7 +28,7 @@ the endpoint for safety-critical announcements.
 ## Installation
 
 ```bash
-pip install gspeech
+pip install g-speech
 ```
 
 ## Usage

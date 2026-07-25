@@ -94,9 +94,9 @@ jobs:
               )
 
           distribution, built_version, _, _ = parse_wheel_filename(wheels[0].name)
-          if distribution != "gspeech":
+          if distribution != "g-speech":
               raise SystemExit(
-                  f"Expected a gspeech wheel, found distribution {distribution!r}"
+                  f"Expected a g-speech wheel, found distribution {distribution!r}"
               )
           if built_version != expected_version:
               raise SystemExit(
@@ -104,14 +104,14 @@ jobs:
                   f"built version {built_version}"
               )
 
-          expected_sdist = f"gspeech-{built_version}.tar.gz"
+          expected_sdist = f"g_speech-{built_version}.tar.gz"
           if source_distributions[0].name != expected_sdist:
               raise SystemExit(
                   f"Expected source distribution {expected_sdist!r}, "
                   f"found {source_distributions[0].name!r}"
               )
 
-          print(f"Validated gspeech {built_version}")
+          print(f"Validated g-speech {built_version}")
           PY
 
       - name: Validate distribution metadata
@@ -142,7 +142,7 @@ jobs:
     timeout-minutes: 10
     environment:
       name: pypi
-      url: https://pypi.org/project/gspeech/
+      url: https://pypi.org/project/g-speech/
     permissions:
       id-token: write
 
