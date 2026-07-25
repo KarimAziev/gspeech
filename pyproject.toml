@@ -45,7 +45,20 @@ ignore = ["E501", "E731", "E402"]
 
 [project.optional-dependencies]
 dev = [
+  "coverage[toml]>=7.10",
   "pre-commit",
   "pyright",
   "ruff",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["gspeech"]
+omit = ["gspeech/version.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.coverage.xml]
+output = "coverage.xml"
