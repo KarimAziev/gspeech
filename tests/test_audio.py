@@ -2,10 +2,12 @@ import io
 import threading
 import unittest
 import wave
+from unittest.mock import patch
 
 import miniaudio
 
 from gspeech.audio import MiniaudioBackend
+from gspeech.exceptions import PlaybackError
 
 
 def silent_wav(duration_seconds=0.02, sample_rate=8_000):
@@ -20,6 +22,37 @@ def silent_wav(duration_seconds=0.02, sample_rate=8_000):
 
 
 class TestMiniaudioBackend(unittest.TestCase):
+    def test_rejects_invalid_configuration(self):
+        with self.assertRaises(ValueError):
+            MiniaudioBackend(buffer_size_msec=0)
+        with self.assertRaises(ValueError):
+            MiniaudioBackend(nchannels=3)
+        with self.assertRaises(ValueError):
+            MiniaudioBackend(sample_rate=0)
+
+    def test_wraps_decoder_initialization_errors(self):
+        backend = MiniaudioBackend()
+        with patch(
+            "gspeech.audio.miniaudio.stream_memory",
+            side_effect=RuntimeError("invalid audio"),
+        ):
+            with self.assertRaises(PlaybackError) as raised:
+                backend.play(b"not audio", threading.Event())
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
+    def test_wraps_output_device_errors(self):
+        backend = MiniaudioBackend()
+        with patch.object(
+            backend,
+            "_get_device",
+            side_effect=RuntimeError("device unavailable"),
+        ):
+            with self.assertRaises(PlaybackError) as raised:
+                backend.play(silent_wav(), threading.Event())
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
     def test_plays_encoded_memory_through_null_device(self):
         backend = MiniaudioBackend(
             buffer_size_msec=10,

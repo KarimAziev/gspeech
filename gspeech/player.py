@@ -6,13 +6,17 @@ import collections
 import concurrent.futures
 import logging
 import threading
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 from gspeech.audio import AudioBackend, MiniaudioBackend
+from gspeech.client import GoogleTranslateTTSClient, Synthesizer
+from gspeech.exceptions import GSpeechError, PlayerClosedError
 from gspeech.speech import Speech
+from gspeech.speech_segment import SpeechSegment
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ class SpeechPolicy(str, Enum):
     ENQUEUE = "enqueue"
 
 
-FINAL_STATUSES = frozenset(
+_FINAL_STATUSES = frozenset(
     {
         SpeechStatus.COMPLETED,
         SpeechStatus.INTERRUPTED,
@@ -53,6 +57,14 @@ class SpeechResult:
     lang: str
     status: SpeechStatus
     error: Exception | None = None
+
+    def raise_for_error(self) -> None:
+        """Raise the underlying error when this result represents a failure."""
+        if self.status is not SpeechStatus.FAILED:
+            return
+        if self.error is not None:
+            raise self.error
+        raise GSpeechError("Speech request failed without an underlying error")
 
 
 class SpeechHandle:
@@ -105,18 +117,19 @@ class SpeechHandle:
 
     def _set_status(self, status: SpeechStatus) -> None:
         with self._lock:
-            if self._status not in FINAL_STATUSES:
+            if self._status not in _FINAL_STATUSES:
                 self._status = status
 
-    def _finish(self, status: SpeechStatus, error: Exception | None = None) -> None:
-        if status not in FINAL_STATUSES:
+    def _finish(self, status: SpeechStatus, error: Exception | None = None) -> bool:
+        if status not in _FINAL_STATUSES:
             raise ValueError(f"{status!r} is not a final speech status")
         with self._lock:
-            if self._status in FINAL_STATUSES:
-                return
+            if self._status in _FINAL_STATUSES:
+                return False
             self._status = status
             self._error = error
             self._done.set()
+            return True
 
 
 @dataclass
@@ -124,6 +137,7 @@ class _SpeechRequest:
     speech: Speech
     handle: SpeechHandle
     cancel_event: threading.Event
+    submitted_at: float
 
 
 class SpeechPlayer:
@@ -131,24 +145,36 @@ class SpeechPlayer:
     Play speech on a dedicated worker with deterministic interruption.
 
     The default ``replace`` policy interrupts active speech and discards older
-    pending requests. Use ``enqueue`` when every submitted request must be heard.
+    pending requests. Downloads run on a bounded executor so the player worker can
+    observe cancellation even while the HTTP client remains blocked.
     """
 
     def __init__(
         self,
         *,
         backend: AudioBackend | None = None,
+        synthesizer: Synthesizer | None = None,
         buffer_size_msec: int = 100,
+        download_workers: int = 2,
     ) -> None:
+        if download_workers <= 0:
+            raise ValueError("download_workers must be greater than zero")
         self._backend = (
             backend
             if backend is not None
             else MiniaudioBackend(buffer_size_msec=buffer_size_msec)
         )
+        self._synthesizer = synthesizer or GoogleTranslateTTSClient()
+        self._downloads = concurrent.futures.ThreadPoolExecutor(
+            max_workers=download_workers,
+            thread_name_prefix="gspeech-download",
+        )
         self._condition = threading.Condition()
+        self._close_lock = threading.Lock()
         self._pending: collections.deque[_SpeechRequest] = collections.deque()
         self._current: _SpeechRequest | None = None
         self._closed = False
+        self._shutdown_complete = False
         self._worker = threading.Thread(
             target=self._run,
             name="gspeech-player",
@@ -204,12 +230,13 @@ class SpeechPlayer:
             speech=speech,
             handle=handle,
             cancel_event=threading.Event(),
+            submitted_at=time.monotonic(),
         )
         interrupted: list[_SpeechRequest] = []
 
         with self._condition:
             if self._closed:
-                raise RuntimeError("SpeechPlayer is closed")
+                raise PlayerClosedError("SpeechPlayer is closed")
 
             if selected_policy is SpeechPolicy.REPLACE:
                 interrupted.extend(self._pending)
@@ -218,12 +245,21 @@ class SpeechPlayer:
                     self._current.cancel_event.set()
 
             self._pending.append(request)
+            queue_size = len(self._pending)
             self._condition.notify()
 
         for old_request in interrupted:
             old_request.cancel_event.set()
-            old_request.handle._finish(SpeechStatus.INTERRUPTED)
+            self._finish(old_request, SpeechStatus.INTERRUPTED)
 
+        logger.info(
+            "Speech request submitted: id=%s lang=%s chars=%d policy=%s queued=%d",
+            request_id,
+            speech.lang,
+            len(speech.text),
+            selected_policy.value,
+            queue_size,
+        )
         return handle
 
     def play(
@@ -237,38 +273,64 @@ class SpeechPlayer:
         """Submit speech and block until it reaches a final state."""
         return self.speak(text, lang, policy=policy).wait(timeout)
 
-    def stop(self) -> None:
-        """Interrupt active speech and discard all pending requests."""
+    def stop(
+        self,
+        *,
+        wait: bool = False,
+        timeout: float | None = None,
+    ) -> bool:
+        """
+        Interrupt active speech and discard pending requests.
+
+        Return whether work was interrupted. With ``wait=True``, wait until the
+        active request acknowledges cancellation.
+        """
         interrupted: list[_SpeechRequest]
+        active_handle: SpeechHandle | None = None
         with self._condition:
             interrupted = list(self._pending)
             self._pending.clear()
             if self._current is not None:
                 self._current.cancel_event.set()
+                active_handle = self._current.handle
 
         for request in interrupted:
             request.cancel_event.set()
-            request.handle._finish(SpeechStatus.INTERRUPTED)
+            self._finish(request, SpeechStatus.INTERRUPTED)
 
-    def close(self) -> None:
-        """Stop playback, terminate the worker, and close the audio backend."""
-        interrupted: list[_SpeechRequest]
-        with self._condition:
-            if self._closed:
+        changed = bool(interrupted) or active_handle is not None
+        if wait and active_handle is not None:
+            active_handle.wait(timeout)
+        return changed
+
+    def close(self, *, timeout: float | None = None) -> None:
+        """Stop requests, terminate workers, and close owned dependencies."""
+        with self._close_lock:
+            interrupted: list[_SpeechRequest] = []
+            with self._condition:
+                if not self._closed:
+                    self._closed = True
+                    interrupted = list(self._pending)
+                    self._pending.clear()
+                    if self._current is not None:
+                        self._current.cancel_event.set()
+                    self._condition.notify()
+
+            for request in interrupted:
+                request.cancel_event.set()
+                self._finish(request, SpeechStatus.INTERRUPTED)
+
+            if threading.current_thread() is self._worker:
                 return
-            self._closed = True
-            interrupted = list(self._pending)
-            self._pending.clear()
-            if self._current is not None:
-                self._current.cancel_event.set()
-            self._condition.notify()
+            if self._shutdown_complete:
+                return
 
-        for request in interrupted:
-            request.cancel_event.set()
-            request.handle._finish(SpeechStatus.INTERRUPTED)
-
-        if threading.current_thread() is not self._worker:
-            self._worker.join()
+            self._worker.join(timeout)
+            if self._worker.is_alive():
+                raise TimeoutError("SpeechPlayer worker did not stop in time")
+            self._downloads.shutdown(wait=True, cancel_futures=True)
+            self._synthesizer.close()
+            self._shutdown_complete = True
 
     def _cancel_request(self, request_id: str) -> bool:
         interrupted: _SpeechRequest | None = None
@@ -289,9 +351,23 @@ class SpeechPlayer:
 
         if interrupted is not None:
             interrupted.cancel_event.set()
-            interrupted.handle._finish(SpeechStatus.INTERRUPTED)
+            self._finish(interrupted, SpeechStatus.INTERRUPTED)
             return True
         return False
+
+    def _finish(
+        self,
+        request: _SpeechRequest,
+        status: SpeechStatus,
+        error: Exception | None = None,
+    ) -> None:
+        if request.handle._finish(status, error):
+            logger.info(
+                "Speech request finished: id=%s status=%s elapsed=%.3fs",
+                request.handle.id,
+                status.value,
+                time.monotonic() - request.submitted_at,
+            )
 
     def _run(self) -> None:
         try:
@@ -312,19 +388,28 @@ class SpeechPlayer:
                         self._current = None
                     self._condition.notify_all()
         finally:
-            self._backend.close()
+            try:
+                self._backend.close()
+            except Exception:
+                logger.exception("Unable to close the audio backend")
 
     def _process(self, request: _SpeechRequest) -> None:
         try:
             status = self._play_segments(request)
         except Exception as error:
             if request.cancel_event.is_set():
-                request.handle._finish(SpeechStatus.INTERRUPTED)
+                self._finish(request, SpeechStatus.INTERRUPTED)
             else:
-                logger.exception("Speech request %s failed", request.handle.id)
-                request.handle._finish(SpeechStatus.FAILED, error)
+                logger.error(
+                    "Speech request failed: id=%s lang=%s chars=%d error=%s",
+                    request.handle.id,
+                    request.handle.lang,
+                    len(request.handle.text),
+                    type(error).__name__,
+                )
+                self._finish(request, SpeechStatus.FAILED, error)
         else:
-            request.handle._finish(status)
+            self._finish(request, status)
 
     def _play_segments(self, request: _SpeechRequest) -> SpeechStatus:
         if request.cancel_event.is_set():
@@ -334,47 +419,58 @@ class SpeechPlayer:
         if not segments:
             return SpeechStatus.COMPLETED
 
-        executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="gspeech-download",
-        )
-        next_audio: concurrent.futures.Future[bytes] | None = None
+        request.handle._set_status(SpeechStatus.DOWNLOADING)
+        current_audio = self._submit_download(segments[0])
 
-        try:
-            request.handle._set_status(SpeechStatus.DOWNLOADING)
-            audio_data = segments[0].get_audio_data()
+        for index, segment in enumerate(segments):
+            audio_data = self._wait_for_audio(current_audio, request.cancel_event)
+            if audio_data is None:
+                return SpeechStatus.INTERRUPTED
 
-            for index, _ in enumerate(segments):
-                if request.cancel_event.is_set():
-                    return SpeechStatus.INTERRUPTED
+            next_audio = (
+                self._submit_download(segments[index + 1])
+                if index + 1 < len(segments)
+                else None
+            )
 
-                if index + 1 < len(segments):
-                    next_audio = executor.submit(segments[index + 1].get_audio_data)
-                else:
-                    next_audio = None
-
-                request.handle._set_status(SpeechStatus.PLAYING)
-                completed = self._backend.play(audio_data, request.cancel_event)
-                if not completed or request.cancel_event.is_set():
-                    return SpeechStatus.INTERRUPTED
-
+            request.handle._set_status(SpeechStatus.PLAYING)
+            logger.debug(
+                "Speech playback started: id=%s segment=%d/%d",
+                request.handle.id,
+                segment.segment_num + 1,
+                segment.segment_count,
+            )
+            completed = self._backend.play(audio_data, request.cancel_event)
+            if not completed or request.cancel_event.is_set():
                 if next_audio is not None:
-                    request.handle._set_status(SpeechStatus.DOWNLOADING)
-                    audio_data = self._wait_for_audio(next_audio, request.cancel_event)
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+                    next_audio.cancel()
+                return SpeechStatus.INTERRUPTED
+
+            if next_audio is not None:
+                request.handle._set_status(SpeechStatus.DOWNLOADING)
+                current_audio = next_audio
 
         return SpeechStatus.COMPLETED
+
+    def _submit_download(
+        self,
+        segment: SpeechSegment,
+    ) -> concurrent.futures.Future[bytes]:
+        return self._downloads.submit(
+            self._synthesizer.synthesize,
+            segment.text,
+            segment.lang,
+        )
 
     @staticmethod
     def _wait_for_audio(
         future: concurrent.futures.Future[bytes],
         cancel_event: threading.Event,
-    ) -> bytes:
+    ) -> bytes | None:
         while True:
             if cancel_event.is_set():
                 future.cancel()
-                return b""
+                return None
             try:
                 return future.result(timeout=0.05)
             except concurrent.futures.TimeoutError:

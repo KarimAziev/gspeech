@@ -1,4 +1,4 @@
-from typing import Dict, Literal, TypedDict
+from typing import Literal, TypedDict
 
 LanguageCode = Literal[
     "af",
@@ -84,7 +84,7 @@ class LanguageOption(TypedDict):
     value: LanguageCode
 
 
-LANGUAGES_LABELS: Dict[LanguageCode, str] = {
+_LANGUAGE_LABELS: dict[LanguageCode, str] = {
     "af": "Afrikaans",
     "ar": "Arabic",
     "bn": "Bengali",
@@ -163,10 +163,16 @@ LANGUAGES_LABELS: Dict[LanguageCode, str] = {
 }
 
 
-LANGUAGES_OPTIONS = [
-    LanguageOption(value=code, label=label) for code, label in LANGUAGES_LABELS.items()
-]
-
-SUPPORTED_LANGUAGES: tuple[LanguageCode, ...] = tuple(
-    code for code in LANGUAGES_LABELS.keys()
+LANGUAGES_OPTIONS: tuple[LanguageOption, ...] = tuple(
+    LanguageOption(value=code, label=label) for code, label in _LANGUAGE_LABELS.items()
 )
+
+SUPPORTED_LANGUAGES: tuple[LanguageCode, ...] = tuple(_LANGUAGE_LABELS)
+
+
+def available_languages() -> tuple[LanguageOption, ...]:
+    """Return fresh language mappings suitable for APIs and user interfaces."""
+    return tuple(
+        LanguageOption(value=option["value"], label=option["label"])
+        for option in LANGUAGES_OPTIONS
+    )

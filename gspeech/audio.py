@@ -8,6 +8,8 @@ from typing import Protocol
 
 import miniaudio
 
+from gspeech.exceptions import PlaybackError
+
 
 class AudioBackend(Protocol):
     """Interface implemented by synchronous, interruptible audio backends."""
@@ -18,10 +20,11 @@ class AudioBackend(Protocol):
 
         Return ``True`` when playback finishes and ``False`` when it is interrupted.
         """
-        raise NotImplementedError
+        ...
 
     def close(self) -> None:
         """Release resources owned by the backend."""
+        ...
 
 
 class MiniaudioBackend:
@@ -69,12 +72,15 @@ class MiniaudioBackend:
         if cancel_event.is_set():
             return False
 
-        source = miniaudio.stream_memory(
-            audio_data,
-            output_format=miniaudio.SampleFormat.SIGNED16,
-            nchannels=self.nchannels,
-            sample_rate=self.sample_rate,
-        )
+        try:
+            source = miniaudio.stream_memory(
+                audio_data,
+                output_format=miniaudio.SampleFormat.SIGNED16,
+                nchannels=self.nchannels,
+                sample_rate=self.sample_rate,
+            )
+        except Exception as error:
+            raise PlaybackError("Unable to decode synthesized speech audio") from error
         finished = threading.Event()
         errors: list[Exception] = []
 
@@ -97,17 +103,25 @@ class MiniaudioBackend:
 
         stream = cancellable_stream()
         next(stream)
-        device = self._get_device()
+        try:
+            device = self._get_device()
+        except Exception as error:
+            raise PlaybackError("Unable to open the audio output device") from error
 
         try:
-            device.start(stream)
-            finished.wait()
+            try:
+                device.start(stream)
+                finished.wait()
+            except Exception as error:
+                raise PlaybackError("Speech audio playback failed") from error
         finally:
             device.stop()
             stream.close()
 
         if errors:
-            raise errors[0]
+            raise PlaybackError(
+                "Unable to decode synthesized speech audio"
+            ) from errors[0]
         return not cancel_event.is_set()
 
     def close(self) -> None:

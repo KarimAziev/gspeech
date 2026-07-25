@@ -1,179 +1,150 @@
-import logging
+"""Text normalization, segmentation, synthesis, and blocking playback helpers."""
+
+from __future__ import annotations
+
 import re
 import string
-import sys
 import unicodedata
-from io import BufferedWriter
+import warnings
+from collections.abc import Callable, Iterator
 from os import PathLike
-from typing import TYPE_CHECKING, Callable, Generator, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, BinaryIO
 
+from gspeech.client import GoogleTranslateTTSClient, Synthesizer
+from gspeech.config import SUPPORTED_LANGUAGES, LanguageCode
 from gspeech.speech_segment import SpeechSegment
 
 if TYPE_CHECKING:
-    from gspeech.player import SpeechPlayer
+    from gspeech.player import SpeechPlayer, SpeechResult
 
-logger = logging.getLogger(__name__)
+_MULTIPLE_WHITESPACE_RE = re.compile(r"\s{2,}")
+
+
+def _find_last_matching_index(
+    text: str,
+    predicate: Callable[[str], bool],
+) -> int | None:
+    for index in range(len(text) - 1, -1, -1):
+        if predicate(text[index]):
+            return index
+    return None
+
+
+def _normalize_text(text: str) -> str:
+    return _MULTIPLE_WHITESPACE_RE.sub(
+        " ",
+        text.replace("\n", " ").replace("\t", " ").strip(),
+    )
 
 
 class Speech:
-    """
-    Handles text-to-speech processing and audio playback.
-    """
+    """Normalized text and language that can be segmented and synthesized."""
 
-    CLEAN_MULTIPLE_SPACES_REGEX = re.compile(r"\s{2,}")
     MAX_SEGMENT_SIZE = 200
 
-    def __init__(self, text: str, lang: str):
-        self.text = self.clean_spaces(text)
-        self.lang = lang
+    def __init__(self, text: str, lang: LanguageCode | str):
+        if lang not in SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported language: {lang!r}")
+        self.text = _normalize_text(text)
+        self.lang: LanguageCode = lang
 
     def __iter__(self) -> Iterator[SpeechSegment]:
-        """
-        Return an iterator that generates speech segments.
-        """
-        return self.__next__()
-
-    def __next__(self) -> Generator[SpeechSegment, None, None]:
-        """
-        Generate speech segments from the text.
-
-        Segments are produced by splitting the input text while taking into account spaces, punctuation,
-        and a maximum segment size constraint.
-        """
-        if self.text == "-":
-            if sys.stdin.isatty():
-                logger.error("Stdin is not a pipe")
-                return
-            while True:
-                new_line = sys.stdin.readline()
-                if not new_line:
-                    return
-                segments = __class__.split_text(new_line)
-                for segment_num, segment in enumerate(segments):
-                    yield SpeechSegment(segment, self.lang, segment_num, len(segments))
-
-        else:
-            segments = __class__.split_text(self.text)
-            for segment_num, segment in enumerate(segments):
-                yield SpeechSegment(segment, self.lang, segment_num, len(segments))
-
-    @staticmethod
-    def find_last_char_index_matching(
-        text: str, func: Callable[[str], bool]
-    ) -> Optional[int]:
-        """
-        Find the index of the last character in a string that matches a given condition.
-
-        The condition is determined by a callable `func` that takes a character as input
-        and returns a boolean.
-        """
-        for i in range(len(text) - 1, -1, -1):
-            if func(text[i]):
-                return i
-
-    @staticmethod
-    def split_text(text: str) -> List[str]:
-        """
-        Split a string into subsegments, each of which does not exceed the maximum segment size.
-
-        The splitting process prioritizes breaking at punctuation, whitespace, or other non-alphanumeric
-        characters, ensuring meaningful boundaries within the text.
-        """
-        segments: List[str] = []
-        remaining_text = __class__.clean_spaces(text)
-
-        while len(remaining_text) > __class__.MAX_SEGMENT_SIZE:
-            cur_text = remaining_text[: __class__.MAX_SEGMENT_SIZE]
-
-            split_idx = __class__.find_last_char_index_matching(
-                cur_text,
-                # https://en.wikipedia.org/wiki/Unicode_character_property#General_Category
-                lambda x: unicodedata.category(x) in ("Ps", "Pe", "Pi", "Pf", "Po"),
+        segments = self.split_text(self.text)
+        for segment_num, segment in enumerate(segments):
+            yield SpeechSegment(
+                text=segment,
+                lang=self.lang,
+                segment_num=segment_num,
+                segment_count=len(segments),
             )
-            if split_idx is None:
-                # try to split at whitespace
-                split_idx = __class__.find_last_char_index_matching(
-                    cur_text, lambda x: unicodedata.category(x).startswith("Z")
-                )
-            if split_idx is None:
-                # try to split at anything not a letter or number
-                split_idx = __class__.find_last_char_index_matching(
-                    cur_text, lambda x: unicodedata.category(x)[0] not in ("L", "N")
-                )
-            if split_idx is None:
-                # split at the last char
-                split_idx = __class__.MAX_SEGMENT_SIZE - 1
 
-            new_segment = cur_text[: split_idx + 1].rstrip()
-            segments.append(new_segment)
-            remaining_text = remaining_text[split_idx + 1 :].lstrip(
+    @classmethod
+    def split_text(cls, text: str) -> list[str]:
+        """Split text at natural boundaries without exceeding 200 characters."""
+        segments: list[str] = []
+        remaining_text = _normalize_text(text)
+
+        while len(remaining_text) > cls.MAX_SEGMENT_SIZE:
+            current_text = remaining_text[: cls.MAX_SEGMENT_SIZE]
+            split_index = _find_last_matching_index(
+                current_text,
+                lambda character: (
+                    unicodedata.category(character) in ("Ps", "Pe", "Pi", "Pf", "Po")
+                ),
+            )
+            if split_index is None:
+                split_index = _find_last_matching_index(
+                    current_text,
+                    lambda character: unicodedata.category(character).startswith("Z"),
+                )
+            if split_index is None:
+                split_index = _find_last_matching_index(
+                    current_text,
+                    lambda character: (
+                        unicodedata.category(character)[0] not in ("L", "N")
+                    ),
+                )
+            if split_index is None:
+                split_index = cls.MAX_SEGMENT_SIZE - 1
+
+            segments.append(current_text[: split_index + 1].rstrip())
+            remaining_text = remaining_text[split_index + 1 :].lstrip(
                 string.whitespace + string.punctuation
             )
 
         if remaining_text:
             segments.append(remaining_text)
-
         return segments
 
-    @staticmethod
-    def clean_spaces(dirty_string: str) -> str:
+    def play(self, player: SpeechPlayer | None = None) -> SpeechResult:
         """
-        Normalize spacing in a string by removing consecutive spaces and trimming whitespace.
+        Play the text synchronously and return its final result.
 
-        This method replaces newlines and tabs with single spaces and ensures the string
-        is stripped of leading and trailing whitespace.
+        Pass a shared player when another thread may interrupt or replace the request.
         """
-        return __class__.CLEAN_MULTIPLE_SPACES_REGEX.sub(
-            " ", dirty_string.replace("\n", " ").replace("\t", " ").strip()
-        )
-
-    def play(self, player: Optional["SpeechPlayer"] = None) -> None:
-        """
-        Play the text synchronously.
-
-        Pass a shared :class:`gspeech.SpeechPlayer` when the caller needs to
-        interrupt this operation from another thread. Without one, a temporary
-        player is created and closed automatically.
-        """
-        from gspeech.player import SpeechPlayer, SpeechPolicy, SpeechStatus
+        from gspeech.player import SpeechPlayer
 
         owns_player = player is None
         active_player = player or SpeechPlayer()
         try:
-            if self.text == "-":
-                for segment in self:
-                    result = active_player.play(
-                        Speech(segment.text, self.lang),
-                        policy=SpeechPolicy.ENQUEUE,
-                    )
-                    if (
-                        result.status is SpeechStatus.FAILED
-                        and result.error is not None
-                    ):
-                        raise result.error
-                return
-
             result = active_player.play(self)
-            if result.status is SpeechStatus.FAILED and result.error is not None:
-                raise result.error
+            result.raise_for_error()
+            return result
         finally:
             if owns_player:
                 active_player.close()
 
-    def save(self, path: Union[str, int, PathLike]) -> None:
-        """
-        Save the synthesized speech audio to a file.
+    def save(
+        self,
+        path: str | bytes | PathLike[str] | PathLike[bytes] | int,
+        *,
+        synthesizer: Synthesizer | None = None,
+    ) -> None:
+        """Synthesize and save concatenated MP3 segment data to a path."""
+        with open(path, "wb") as output:
+            self.write_to(output, synthesizer=synthesizer)
 
-        The output file will be in MP3 format.
-        """
-        with open(path, "wb") as f:
-            self.savef(f)
+    def write_to(
+        self,
+        file: BinaryIO,
+        *,
+        synthesizer: Synthesizer | None = None,
+    ) -> None:
+        """Synthesize and write concatenated MP3 segment data to a binary stream."""
+        owns_synthesizer = synthesizer is None
+        active_synthesizer = synthesizer or GoogleTranslateTTSClient()
+        try:
+            for segment in self:
+                file.write(active_synthesizer.synthesize(segment.text, segment.lang))
+        finally:
+            if owns_synthesizer:
+                active_synthesizer.close()
 
-    def savef(self, file: BufferedWriter) -> None:
-        """
-        Write the synthesized speech audio into a file-like object.
-
-        The file object must be writable, and the data will be written in binary format.
-        """
-        for segment in self:
-            file.write(segment.get_audio_data())
+    def savef(self, file: BinaryIO) -> None:
+        """Deprecated alias for :meth:`write_to`."""
+        warnings.warn(
+            "Speech.savef() is deprecated; use Speech.write_to()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.write_to(file)

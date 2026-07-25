@@ -1,5 +1,7 @@
 {
-  "enableReachabilityAnalysis": false,
+  "enableReachabilityAnalysis": true,
   "reportMissingImports": "error",
-  "reportUninitializedInstanceVariable": false
+  "reportUninitializedInstanceVariable": "error",
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "standard"
 }
