@@ -344,7 +344,7 @@ class SpeechPlayer:
             request.handle._set_status(SpeechStatus.DOWNLOADING)
             audio_data = segments[0].get_audio_data()
 
-            for index, segment in enumerate(segments):
+            for index, _ in enumerate(segments):
                 if request.cancel_event.is_set():
                     return SpeechStatus.INTERRUPTED
 
