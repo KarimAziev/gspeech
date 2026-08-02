@@ -3,25 +3,20 @@
 # About
 
 `gspeech` synthesizes speech with the Google Translate TTS endpoint and plays it
-through a small, cross-platform
-[Miniaudio](https://github.com/irmen/pyminiaudio) backend. Playback works on
-Raspberry Pi, Linux, macOS, and Windows.
+through a small, cross-platform [Miniaudio](https://github.com/irmen/pyminiaudio) backend.
 
-The Google Translate endpoint is undocumented and is not an official Google API.
-Applications should therefore handle synthesis failures and should not rely on
-the endpoint for safety-critical announcements.
+Playback works on Raspberry Pi, Linux, macOS, and Windows.
 
 **Table of Contents**
 
 > - [About](#about)
 >   - [Installation](#installation)
->   - [Usage](#usage)
->     - [Command line](#command-line)
->     - [Python API](#python-api)
->       - [Interruption and queuing](#interruption-and-queuing)
->       - [Synthesis and cache configuration](#synthesis-and-cache-configuration)
->       - [Logging](#logging)
->       - [Errors and shutdown](#errors-and-shutdown)
+>   - [Command line](#command-line)
+>   - [Python API](#python-api)
+>     - [Interruption and queuing](#interruption-and-queuing)
+>     - [Synthesis and cache configuration](#synthesis-and-cache-configuration)
+>     - [Logging](#logging)
+>     - [Errors and shutdown](#errors-and-shutdown)
 >   - [Development](#development)
 
 ## Installation
@@ -30,9 +25,7 @@ the endpoint for safety-critical announcements.
 pip install g-speech
 ```
 
-## Usage
-
-### Command line
+## Command line
 
 Speak text:
 
@@ -77,7 +70,7 @@ gspeech --version
 Only the CLI treats `-` as standard input. In the Python API,
 `Speech("-", "en")` synthesizes a literal hyphen.
 
-### Python API
+## Python API
 
 The familiar blocking API remains available:
 
@@ -103,7 +96,7 @@ with SpeechPlayer() as player:
     print(second.wait().status)  # SpeechStatus.COMPLETED
 ```
 
-#### Interruption and queuing
+### Interruption and queuing
 
 `SpeechPlayer.speak()` is non-blocking and returns a thread-safe
 `SpeechHandle`. The default `replace` policy:
@@ -148,7 +141,7 @@ player.close()
 implementations. `Speech.write_to()` does not close an injected synthesizer
 because the caller owns that standalone dependency.
 
-#### Synthesis and cache configuration
+### Synthesis and cache configuration
 
 `GoogleTranslateTTSClient` owns HTTP sessions, timeouts, and the persistent
 audio cache:
@@ -184,7 +177,7 @@ Cache keys are SHA-256 digests and do not contain the original speech text.
 Audio data is stored in a small SQLite database under the platform-specific user
 cache directory by default.
 
-#### Logging
+### Logging
 
 Library loggers use the `gspeech` namespace and do not configure application
 logging. Applications can enable them normally:
@@ -200,7 +193,7 @@ Lifecycle logs include request IDs, language, character counts, segment numbers,
 statuses, and elapsed times. They intentionally omit speech text and complete
 provider URLs.
 
-#### Errors and shutdown
+### Errors and shutdown
 
 The public exception hierarchy is:
 
